@@ -1,0 +1,25 @@
+{
+  "name": "guessing-game",
+  "version": "1.0.0",
+  "description": "Live guessing game with rotating game masters and realtime scoring.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "guessing-game",
+    "socket.io",
+    "express",
+    "realtime"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": "18.x"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  }
+}
