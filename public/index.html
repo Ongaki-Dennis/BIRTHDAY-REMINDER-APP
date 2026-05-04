@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Birthday Reminder App</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Celebrate Customers Automatically</p>
+          <h1>Birthday reminders that wake up at 7:00 AM and send the love for you.</h1>
+          <p class="hero-text">
+            Capture customer birthdays in one clean place, keep every email unique,
+            and let the app check each morning for today’s celebrants.
+          </p>
+          <div class="hero-pills">
+            <span>Unique emails only</span>
+            <span>Daily birthday check</span>
+            <span>Gmail-ready delivery</span>
+          </div>
+        </div>
+
+        <aside class="status-card">
+          <p class="eyebrow">Today’s Workflow</p>
+          <ol>
+            <li>Add customer details.</li>
+            <li>The app stores them in the database.</li>
+            <li>The scheduler checks birthdays every day at 7:00 AM.</li>
+            <li>Celebrants receive a birthday email.</li>
+          </ol>
+          <p class="status-note" id="scheduler-note">Loading scheduler status...</p>
+        </aside>
+      </section>
+
+      <section class="content-grid">
+        <section class="card form-card">
+          <div class="section-heading">
+            <p class="eyebrow">New Entry</p>
+            <h2>Add a birthday reminder</h2>
+          </div>
+
+          <form id="birthday-form">
+            <label>
+              Username
+              <input
+                id="username"
+                name="username"
+                maxlength="60"
+                placeholder="Amina Hassan"
+                required
+              />
+            </label>
+
+            <label>
+              Email
+              <input
+                id="email"
+                name="email"
+                type="email"
+                maxlength="160"
+                placeholder="amina@example.com"
+                required
+              />
+            </label>
+
+            <label>
+              Date of birth
+              <input id="dateOfBirth" name="dateOfBirth" type="date" required />
+            </label>
+
+            <button type="submit" id="submit-button">Save birthday</button>
+          </form>
+
+          <p class="feedback" id="form-feedback" hidden></p>
+        </section>
+
+        <section class="card dashboard-card">
+          <div class="section-heading section-heading-inline">
+            <div>
+              <p class="eyebrow">Dashboard</p>
+              <h2>Saved celebrants</h2>
+            </div>
+            <span class="status-chip">Automatic 7:00 AM check</span>
+          </div>
+
+          <div class="dashboard-meta">
+            <p id="total-count">0 customers saved</p>
+            <p id="job-feedback">Birthday emails are sent automatically when today matches a saved birthday.</p>
+          </div>
+
+          <div class="list-shell" id="entries-list"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
