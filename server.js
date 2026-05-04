@@ -4,18 +4,17 @@ const fs = require("fs/promises");
 const path = require("path");
 const crypto = require("crypto");
 const express = require("express");
-const nodemailer = require("nodemailer");
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = process.env.DATA_DIR
   ? path.resolve(process.env.DATA_DIR)
   : path.join(__dirname, "data");
-const DATA_FILE = path.join(DATA_DIR, "birthdays.json");
-const DAILY_JOB_HOUR = 7;
-const EMAIL_FROM = process.env.EMAIL_FROM || process.env.GMAIL_USER || "";
+const DATA_FILE = path.join(DATA_DIR, "game-sessions.json");
+const ROUND_DURATION_MS = 60 * 1000;
+const MAX_ATTEMPTS = 3;
+const WIN_POINTS = 10;
 
-let dailyJobTimer = null;
 let dataLock = Promise.resolve();
 
 app.use(express.json());
@@ -28,31 +27,11 @@ function sanitizeText(value, maxLength = 120) {
     .slice(0, maxLength);
 }
 
-function normalizeEmail(value) {
-  return sanitizeText(value, 160).toLowerCase();
-}
-
-function isValidEmail(value) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-}
-
-function isValidDateOfBirth(value) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return false;
-  }
-
-  const [year, month, day] = value.split("-").map(Number);
-  const parsed = new Date(year, month - 1, day);
-
-  if (Number.isNaN(parsed.getTime())) {
-    return false;
-  }
-
-  return (
-    parsed.getFullYear() === year &&
-    parsed.getMonth() === month - 1 &&
-    parsed.getDate() === day
-  );
+function withDataLock(task) {
+  const run = async () => task();
+  const next = dataLock.then(run, run);
+  dataLock = next.catch(() => {});
+  return next;
 }
 
 async function ensureDataFile() {
@@ -61,362 +40,619 @@ async function ensureDataFile() {
   try {
     await fs.access(DATA_FILE);
   } catch {
-    await fs.writeFile(DATA_FILE, "[]\n", "utf8");
+    await fs.writeFile(DATA_FILE, "{\n  \"sessions\": []\n}\n", "utf8");
   }
 }
 
-async function readEntries() {
+async function readStore() {
   await ensureDataFile();
   const content = await fs.readFile(DATA_FILE, "utf8");
 
   try {
     const parsed = JSON.parse(content);
-    return Array.isArray(parsed) ? parsed : [];
+    return {
+      sessions: Array.isArray(parsed.sessions) ? parsed.sessions : []
+    };
   } catch {
-    return [];
+    return { sessions: [] };
   }
 }
 
-async function writeEntries(entries) {
+async function writeStore(store) {
   await ensureDataFile();
-  await fs.writeFile(DATA_FILE, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
+  await fs.writeFile(DATA_FILE, `${JSON.stringify(store, null, 2)}\n`, "utf8");
 }
 
-function withDataLock(task) {
-  const run = async () => task();
-  const next = dataLock.then(run, run);
-  dataLock = next.catch(() => {});
-  return next;
-}
-
-function getDisplayDateParts(value) {
-  const [year, month, day] = value.split("-").map(Number);
-  return { year, month, day };
-}
-
-function formatBirthdayLabel(value) {
-  const { year, month, day } = getDisplayDateParts(value);
-  const date = new Date(year, month - 1, day);
-
-  return new Intl.DateTimeFormat("en-US", {
-    month: "long",
-    day: "numeric",
-    year: "numeric"
-  }).format(date);
-}
-
-function getTodayKey(date = new Date()) {
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-${day}`;
-}
-
-function isBirthdayToday(dateOfBirth, today = new Date()) {
-  const { month, day } = getDisplayDateParts(dateOfBirth);
-  return month === today.getMonth() + 1 && day === today.getDate();
-}
-
-function buildTransporter() {
-  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-    return null;
-  }
-
-  return nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.GMAIL_USER,
-      pass: process.env.GMAIL_APP_PASSWORD
-    }
-  });
-}
-
-function buildBirthdayEmail(entry) {
-  const escapedName = entry.username.replace(/[<>&"]/g, (char) => {
-    return (
-      {
-        "<": "&lt;",
-        ">": "&gt;",
-        "&": "&amp;",
-        '"': "&quot;"
-      }[char] || char
-    );
-  });
-
+function createEvent(type, message, meta = {}) {
   return {
-    subject: `Happy Birthday, ${entry.username}!`,
-    html: `
-      <div style="margin:0;padding:32px 16px;background:#fff7ef;font-family:Arial,sans-serif;color:#2e241c;">
-        <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:24px;overflow:hidden;border:1px solid #f2d7bf;box-shadow:0 18px 40px rgba(168,99,45,0.14);">
-          <div style="padding:28px 32px;background:linear-gradient(135deg,#ffb36b 0%,#ff7b54 100%);color:#ffffff;">
-            <p style="margin:0 0 10px;font-size:12px;letter-spacing:0.18em;text-transform:uppercase;font-weight:700;">Birthday Wishes</p>
-            <h1 style="margin:0;font-size:34px;line-height:1.1;">Happy Birthday, ${escapedName}!</h1>
-          </div>
-          <div style="padding:32px;">
-            <p style="margin:0 0 16px;font-size:16px;line-height:1.7;">
-              Wishing you a joyful birthday filled with warm moments, sweet surprises, and a year ahead full of good health, growth, and success.
-            </p>
-            <p style="margin:0 0 24px;font-size:16px;line-height:1.7;">
-              Thank you for being part of our community. We are celebrating you today and sending our very best wishes your way.
-            </p>
-            <div style="padding:18px 20px;border-radius:18px;background:#fff3e4;border:1px solid #f7d8b4;">
-              <strong style="display:block;margin-bottom:8px;font-size:15px;">Have an amazing day!</strong>
-              <span style="font-size:14px;line-height:1.6;color:#6d5847;">
-                May your day be bright, your cake be sweet, and your next chapter be even better than the last.
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-    `,
-    text: `Happy Birthday, ${entry.username}! Wishing you a joyful day filled with sweet surprises and a wonderful year ahead.`
+    id: crypto.randomUUID(),
+    type,
+    message,
+    createdAt: new Date().toISOString(),
+    ...meta
   };
 }
 
-async function sendBirthdayEmails({ reason = "manual" } = {}) {
-  return withDataLock(async () => {
-    const transporter = buildTransporter();
-    const entries = await readEntries();
-    const today = new Date();
-    const todayKey = getTodayKey(today);
-    const celebrants = entries.filter((entry) => {
-      return isBirthdayToday(entry.dateOfBirth, today) && entry.lastBirthdayEmailSentOn !== todayKey;
-    });
-
-    if (!celebrants.length) {
-      return {
-        ok: true,
-        reason,
-        celebrantsChecked: entries.length,
-        sentCount: 0,
-        skippedCount: entries.length,
-        message: "No new birthday emails were due today."
-      };
-    }
-
-    if (!transporter) {
-      return {
-        ok: false,
-        reason,
-        celebrantsChecked: entries.length,
-        sentCount: 0,
-        skippedCount: celebrants.length,
-        message:
-          "Birthday matches were found, but Gmail credentials are missing. Set GMAIL_USER and GMAIL_APP_PASSWORD."
-      };
-    }
-
-    let sentCount = 0;
-
-    for (const entry of celebrants) {
-      const email = buildBirthdayEmail(entry);
-
-      await transporter.sendMail({
-        from: EMAIL_FROM || process.env.GMAIL_USER,
-        to: entry.email,
-        subject: email.subject,
-        html: email.html,
-        text: email.text
-      });
-
-      entry.lastBirthdayEmailSentOn = todayKey;
-      entry.lastBirthdayEmailSentAt = new Date().toISOString();
-      sentCount += 1;
-    }
-
-    await writeEntries(entries);
-
-    return {
-      ok: true,
-      reason,
-      celebrantsChecked: entries.length,
-      sentCount,
-      skippedCount: entries.length - sentCount,
-      message: `Birthday emails sent to ${sentCount} celebrant${sentCount === 1 ? "" : "s"}.`
-    };
-  });
+function createPlayer(displayName) {
+  return {
+    id: crypto.randomUUID(),
+    displayName,
+    score: 0,
+    joinedAt: new Date().toISOString()
+  };
 }
 
-function scheduleNextBirthdayRun() {
-  if (dailyJobTimer) {
-    clearTimeout(dailyJobTimer);
-  }
+function createSession(gameMasterName) {
+  const gameMaster = createPlayer(gameMasterName);
 
-  const now = new Date();
-  const nextRun = new Date(now);
-  nextRun.setHours(DAILY_JOB_HOUR, 0, 0, 0);
-
-  if (nextRun <= now) {
-    nextRun.setDate(nextRun.getDate() + 1);
-  }
-
-  const delay = nextRun.getTime() - now.getTime();
-
-  dailyJobTimer = setTimeout(async () => {
-    try {
-      const result = await sendBirthdayEmails({ reason: "scheduled" });
-      console.log(`[birthday-job] ${result.message}`);
-    } catch (error) {
-      console.error("[birthday-job] Failed to send scheduled birthday emails.", error);
-    } finally {
-      scheduleNextBirthdayRun();
-    }
-  }, delay);
-
-  console.log(`[birthday-job] Next birthday check scheduled for ${nextRun.toString()}`);
+  return {
+    id: crypto.randomUUID().slice(0, 8).toUpperCase(),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    status: "lobby",
+    roundNumber: 0,
+    currentGameMasterId: gameMaster.id,
+    players: [gameMaster],
+    round: null,
+    lastRoundSummary: null,
+    events: [
+      createEvent("system", `${gameMaster.displayName} created the session and became game master.`)
+    ]
+  };
 }
 
-app.get("/api/birthdays", async (_req, res) => {
-  const entries = await readEntries();
-  const sortedEntries = entries
-    .slice()
-    .sort((left, right) => left.username.localeCompare(right.username))
-    .map((entry) => ({
-      ...entry,
-      birthdayLabel: formatBirthdayLabel(entry.dateOfBirth)
-    }));
+function getPlayer(session, playerId) {
+  return session.players.find((player) => player.id === playerId);
+}
 
-  res.json({
-    entries: sortedEntries,
-    total: sortedEntries.length,
-    nextScheduledCheck: "7:00 AM server time"
+function getGameMaster(session) {
+  return getPlayer(session, session.currentGameMasterId) || null;
+}
+
+function getNextGameMasterId(session, currentId) {
+  if (!session.players.length) {
+    return null;
+  }
+
+  const currentIndex = session.players.findIndex((player) => player.id === currentId);
+
+  if (currentIndex === -1) {
+    return session.players[0].id;
+  }
+
+  return session.players[(currentIndex + 1) % session.players.length].id;
+}
+
+function buildPublicRound(round, viewerId, session) {
+  if (!round) {
+    return null;
+  }
+
+  const isGameMaster = session.currentGameMasterId === viewerId;
+  const viewerAttemptsUsed = round.attemptsByPlayer?.[viewerId] || 0;
+  const answerVisible = round.status === "ended" || isGameMaster;
+
+  return {
+    question: round.question,
+    answer: answerVisible ? round.answer : null,
+    status: round.status,
+    createdBy: round.createdBy,
+    startedAt: round.startedAt,
+    expiresAt: round.expiresAt,
+    endedAt: round.endedAt,
+    winnerPlayerId: round.winnerPlayerId,
+    endReason: round.endReason,
+    attemptsRemaining: Math.max(0, MAX_ATTEMPTS - viewerAttemptsUsed),
+    maxAttempts: MAX_ATTEMPTS
+  };
+}
+
+function buildSessionView(session, viewerId) {
+  const viewer = getPlayer(session, viewerId);
+  const gameMaster = getGameMaster(session);
+
+  return {
+    id: session.id,
+    status: session.status,
+    roundNumber: session.roundNumber,
+    playerCount: session.players.length,
+    currentGameMasterId: session.currentGameMasterId,
+    gameMasterName: gameMaster ? gameMaster.displayName : null,
+    viewer: viewer
+      ? {
+          id: viewer.id,
+          displayName: viewer.displayName,
+          score: viewer.score,
+          isGameMaster: viewer.id === session.currentGameMasterId
+        }
+      : null,
+    players: session.players.map((player) => ({
+      id: player.id,
+      displayName: player.displayName,
+      score: player.score,
+      isGameMaster: player.id === session.currentGameMasterId
+    })),
+    round: buildPublicRound(session.round, viewerId, session),
+    lastRoundSummary: session.lastRoundSummary,
+    events: session.events.slice(-80)
+  };
+}
+
+function ensureSessionExists(store, sessionId) {
+  const session = store.sessions.find((entry) => entry.id === sessionId);
+
+  if (!session) {
+    const error = new Error("Session not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return session;
+}
+
+function ensurePlayerInSession(session, playerId) {
+  const player = getPlayer(session, playerId);
+
+  if (!player) {
+    const error = new Error("Player not found in this session.");
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return player;
+}
+
+function ensureGameMaster(session, playerId) {
+  if (session.currentGameMasterId !== playerId) {
+    const error = new Error("Only the current game master can do that.");
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+function expireRoundIfNeeded(session) {
+  if (!session.round || session.round.status !== "active") {
+    return false;
+  }
+
+  if (Date.now() < new Date(session.round.expiresAt).getTime()) {
+    return false;
+  }
+
+  endRound(session, {
+    endReason: "time_expired",
+    message: `Time is up. The answer was "${session.round.answer}".`
   });
-});
 
-app.post("/api/birthdays", async (req, res) => {
-  const username = sanitizeText(req.body?.username, 60);
-  const email = normalizeEmail(req.body?.email);
-  const dateOfBirth = sanitizeText(req.body?.dateOfBirth, 10);
+  return true;
+}
 
-  if (username.length < 2) {
-    res.status(400).json({ message: "Username must be at least 2 characters long." });
+function endRound(session, { winnerPlayerId = null, endReason, message }) {
+  if (!session.round) {
     return;
   }
 
-  if (!isValidEmail(email)) {
-    res.status(400).json({ message: "Enter a valid email address." });
-    return;
-  }
+  const completedRound = {
+    question: session.round.question,
+    answer: session.round.answer,
+    winnerPlayerId,
+    endReason,
+    endedAt: new Date().toISOString()
+  };
 
-  if (!isValidDateOfBirth(dateOfBirth)) {
-    res.status(400).json({ message: "Enter date of birth in YYYY-MM-DD format." });
-    return;
-  }
+  session.round.status = "ended";
+  session.round.endedAt = completedRound.endedAt;
+  session.round.winnerPlayerId = winnerPlayerId;
+  session.round.endReason = endReason;
+  session.status = "lobby";
 
-  try {
-    const createdEntry = await withDataLock(async () => {
-      const entries = await readEntries();
-      const duplicateEmail = entries.some((entry) => entry.email === email);
+  if (winnerPlayerId) {
+    const winner = getPlayer(session, winnerPlayerId);
 
-      if (duplicateEmail) {
-        const error = new Error("This email is already registered.");
-        error.statusCode = 409;
-        throw error;
-      }
-
-      const newEntry = {
-        id: crypto.randomUUID(),
-        username,
-        email,
-        dateOfBirth,
-        createdAt: new Date().toISOString(),
-        lastBirthdayEmailSentOn: null,
-        lastBirthdayEmailSentAt: null
-      };
-
-      entries.push(newEntry);
-      await writeEntries(entries);
-      return newEntry;
-    });
-
-    res.status(201).json({
-      message: `${username} was added to the birthday list.`,
-      entry: {
-        ...createdEntry,
-        birthdayLabel: formatBirthdayLabel(createdEntry.dateOfBirth)
-      }
-    });
-  } catch (error) {
-    if (error.statusCode === 409) {
-      res.status(409).json({ message: error.message });
-      return;
+    if (winner) {
+      winner.score += WIN_POINTS;
     }
-
-    console.error("Failed to save birthday entry.", error);
-    res.status(500).json({ message: "Could not save birthday entry right now." });
-  }
-});
-
-app.post("/api/jobs/send-birthday-emails", async (req, res) => {
-  const cronSecret = process.env.CRON_SECRET;
-  const providedSecret = req.get("x-cron-secret") || req.body?.secret;
-
-  if (!cronSecret) {
-    res.status(503).json({
-      message: "Set CRON_SECRET before exposing the birthday job endpoint."
-    });
-    return;
   }
 
-  if (providedSecret !== cronSecret) {
-    res.status(401).json({ message: "Unauthorized job request." });
-    return;
+  session.events.push(createEvent("system", message, { winnerPlayerId, endReason }));
+
+  const previousGameMasterId = session.currentGameMasterId;
+  session.currentGameMasterId = getNextGameMasterId(session, previousGameMasterId);
+  session.lastRoundSummary = completedRound;
+  session.round = null;
+
+  const nextGameMaster = getGameMaster(session);
+
+  if (nextGameMaster) {
+    session.events.push(
+      createEvent(
+        "system",
+        `${nextGameMaster.displayName} is now the game master for the next round.`
+      )
+    );
+  }
+}
+
+function validateSessionCode(sessionId) {
+  const normalized = sanitizeText(sessionId, 8).toUpperCase();
+
+  if (!/^[A-Z0-9]{6,8}$/.test(normalized)) {
+    const error = new Error("Enter a valid session code.");
+    error.statusCode = 400;
+    throw error;
   }
 
-  try {
-    const result = await sendBirthdayEmails({ reason: "manual" });
-    res.json(result);
-  } catch (error) {
-    console.error("[birthday-job] Manual run failed.", error);
-    res.status(500).json({
-      ok: false,
-      message: "Birthday email job failed.",
-      error: error.message
-    });
-  }
-});
+  return normalized;
+}
 
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
-    emailConfigured: Boolean(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD),
-    scheduler: "Daily 7:00 AM server time",
-    timezone: process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone,
-    jobEndpointProtected: Boolean(process.env.CRON_SECRET)
+    app: "guessing-game",
+    roundDurationSeconds: ROUND_DURATION_MS / 1000,
+    maxAttempts: MAX_ATTEMPTS,
+    winPoints: WIN_POINTS
   });
+});
+
+app.post("/api/sessions", async (req, res) => {
+  const displayName = sanitizeText(req.body?.displayName, 40);
+
+  if (displayName.length < 2) {
+    res.status(400).json({ message: "Display name must be at least 2 characters long." });
+    return;
+  }
+
+  const result = await withDataLock(async () => {
+    const store = await readStore();
+    const session = createSession(displayName);
+    store.sessions.push(session);
+    await writeStore(store);
+
+    return {
+      message: `Session ${session.id} is ready.`,
+      playerId: session.currentGameMasterId,
+      session: buildSessionView(session, session.currentGameMasterId)
+    };
+  });
+
+  res.status(201).json(result);
+});
+
+app.post("/api/sessions/:id/join", async (req, res) => {
+  const sessionId = validateSessionCode(req.params.id);
+  const displayName = sanitizeText(req.body?.displayName, 40);
+
+  if (displayName.length < 2) {
+    res.status(400).json({ message: "Display name must be at least 2 characters long." });
+    return;
+  }
+
+  try {
+    const result = await withDataLock(async () => {
+      const store = await readStore();
+      const session = ensureSessionExists(store, sessionId);
+      expireRoundIfNeeded(session);
+
+      if (session.status === "in_progress") {
+        const error = new Error("You cannot join while a game is in progress.");
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const duplicateName = session.players.some(
+        (player) => player.displayName.toLowerCase() === displayName.toLowerCase()
+      );
+
+      if (duplicateName) {
+        const error = new Error("That display name is already in this session.");
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const player = createPlayer(displayName);
+      session.players.push(player);
+      session.updatedAt = new Date().toISOString();
+      session.events.push(createEvent("system", `${displayName} joined the session.`));
+      await writeStore(store);
+
+      return {
+        message: `${displayName} joined session ${session.id}.`,
+        playerId: player.id,
+        session: buildSessionView(session, player.id)
+      };
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message || "Join failed." });
+  }
+});
+
+app.get("/api/sessions/:id", async (req, res) => {
+  const sessionId = validateSessionCode(req.params.id);
+  const viewerId = sanitizeText(req.query.playerId, 64);
+
+  try {
+    const session = await withDataLock(async () => {
+      const store = await readStore();
+      const entry = ensureSessionExists(store, sessionId);
+      const changed = expireRoundIfNeeded(entry);
+
+      if (changed) {
+        entry.updatedAt = new Date().toISOString();
+        await writeStore(store);
+      }
+
+      return entry;
+    });
+
+    res.json({ session: buildSessionView(session, viewerId) });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message || "Could not load session." });
+  }
+});
+
+app.post("/api/sessions/:id/leave", async (req, res) => {
+  const sessionId = validateSessionCode(req.params.id);
+  const playerId = sanitizeText(req.body?.playerId, 64);
+
+  if (!playerId) {
+    res.status(400).json({ message: "Player id is required." });
+    return;
+  }
+
+  try {
+    const result = await withDataLock(async () => {
+      const store = await readStore();
+      const session = ensureSessionExists(store, sessionId);
+      const player = ensurePlayerInSession(session, playerId);
+      const leavingWasGameMaster = playerId === session.currentGameMasterId;
+
+      session.players = session.players.filter((entry) => entry.id !== playerId);
+      session.events.push(createEvent("system", `${player.displayName} left the session.`));
+
+      if (!session.players.length) {
+        store.sessions = store.sessions.filter((entry) => entry.id !== session.id);
+        await writeStore(store);
+        return {
+          deleted: true,
+          message: "Session deleted because all players left."
+        };
+      }
+
+      if (session.status === "in_progress" && leavingWasGameMaster) {
+        endRound(session, {
+          endReason: "player_left",
+          message: `The round ended because ${player.displayName} left. The answer was "${session.round.answer}".`
+        });
+      } else if (leavingWasGameMaster) {
+        session.currentGameMasterId = getNextGameMasterId(session, playerId);
+        const nextGameMaster = getGameMaster(session);
+
+        if (nextGameMaster) {
+          session.events.push(
+            createEvent("system", `${nextGameMaster.displayName} is now the game master.`)
+          );
+        }
+      }
+
+      session.updatedAt = new Date().toISOString();
+      await writeStore(store);
+
+      return {
+        deleted: false,
+        message: `${player.displayName} left the session.`
+      };
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message || "Could not leave session." });
+  }
+});
+
+app.post("/api/sessions/:id/question", async (req, res) => {
+  const sessionId = validateSessionCode(req.params.id);
+  const playerId = sanitizeText(req.body?.playerId, 64);
+  const question = sanitizeText(req.body?.question, 180);
+  const answer = sanitizeText(req.body?.answer, 120);
+
+  if (question.length < 6) {
+    res.status(400).json({ message: "Question must be at least 6 characters long." });
+    return;
+  }
+
+  if (answer.length < 1) {
+    res.status(400).json({ message: "Answer is required." });
+    return;
+  }
+
+  try {
+    const result = await withDataLock(async () => {
+      const store = await readStore();
+      const session = ensureSessionExists(store, sessionId);
+      ensurePlayerInSession(session, playerId);
+      ensureGameMaster(session, playerId);
+      expireRoundIfNeeded(session);
+
+      if (session.status === "in_progress") {
+        const error = new Error("You cannot change the question during an active round.");
+        error.statusCode = 409;
+        throw error;
+      }
+
+      session.round = {
+        question,
+        answer,
+        status: "draft",
+        createdBy: playerId,
+        startedAt: null,
+        expiresAt: null,
+        endedAt: null,
+        winnerPlayerId: null,
+        endReason: null,
+        attemptsByPlayer: {},
+        guesses: []
+      };
+      session.updatedAt = new Date().toISOString();
+      session.events.push(createEvent("system", "A new question is ready. The game master can start the round."));
+      await writeStore(store);
+
+      return {
+        message: "Question saved. Start the round when everyone is ready.",
+        session: buildSessionView(session, playerId)
+      };
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message || "Could not save question." });
+  }
+});
+
+app.post("/api/sessions/:id/start", async (req, res) => {
+  const sessionId = validateSessionCode(req.params.id);
+  const playerId = sanitizeText(req.body?.playerId, 64);
+
+  try {
+    const result = await withDataLock(async () => {
+      const store = await readStore();
+      const session = ensureSessionExists(store, sessionId);
+      ensurePlayerInSession(session, playerId);
+      ensureGameMaster(session, playerId);
+      expireRoundIfNeeded(session);
+
+      if (session.players.length < 3) {
+        const error = new Error("At least 3 players are required before the game starts.");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      if (!session.round || session.round.status !== "draft") {
+        const error = new Error("Create a question and answer before starting the game.");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      session.status = "in_progress";
+      session.roundNumber += 1;
+      session.round.status = "active";
+      session.round.startedAt = new Date().toISOString();
+      session.round.expiresAt = new Date(Date.now() + ROUND_DURATION_MS).toISOString();
+      session.updatedAt = new Date().toISOString();
+      session.events.push(
+        createEvent(
+          "system",
+          `Round ${session.roundNumber} started. Players have ${MAX_ATTEMPTS} attempts and 60 seconds.`
+        )
+      );
+      await writeStore(store);
+
+      return {
+        message: "Game started.",
+        session: buildSessionView(session, playerId)
+      };
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message || "Could not start game." });
+  }
+});
+
+app.post("/api/sessions/:id/guess", async (req, res) => {
+  const sessionId = validateSessionCode(req.params.id);
+  const playerId = sanitizeText(req.body?.playerId, 64);
+  const guess = sanitizeText(req.body?.guess, 120);
+
+  if (guess.length < 1) {
+    res.status(400).json({ message: "Enter a guess before submitting." });
+    return;
+  }
+
+  try {
+    const result = await withDataLock(async () => {
+      const store = await readStore();
+      const session = ensureSessionExists(store, sessionId);
+      const player = ensurePlayerInSession(session, playerId);
+      expireRoundIfNeeded(session);
+
+      if (session.status !== "in_progress" || !session.round || session.round.status !== "active") {
+        const error = new Error("There is no active round right now.");
+        error.statusCode = 409;
+        throw error;
+      }
+
+      if (playerId === session.currentGameMasterId) {
+        const error = new Error("The game master cannot submit guesses.");
+        error.statusCode = 403;
+        throw error;
+      }
+
+      const attemptsUsed = session.round.attemptsByPlayer[playerId] || 0;
+
+      if (attemptsUsed >= MAX_ATTEMPTS) {
+        const error = new Error("You have used all 3 attempts.");
+        error.statusCode = 409;
+        throw error;
+      }
+
+      const isCorrect = guess.toLowerCase() === session.round.answer.toLowerCase();
+      session.round.attemptsByPlayer[playerId] = attemptsUsed + 1;
+      session.round.guesses.push({
+        playerId,
+        guess,
+        createdAt: new Date().toISOString(),
+        isCorrect
+      });
+      session.events.push(
+        createEvent(
+          isCorrect ? "winner" : "guess",
+          isCorrect
+            ? `${player.displayName} guessed the correct answer.`
+            : `${player.displayName} guessed "${guess}" and it was not correct.`,
+          { playerId, guess, isCorrect }
+        )
+      );
+
+      if (isCorrect) {
+        endRound(session, {
+          winnerPlayerId: playerId,
+          endReason: "winner",
+          message: `${player.displayName} won the round. The answer was "${session.round.answer}".`
+        });
+      }
+
+      session.updatedAt = new Date().toISOString();
+      await writeStore(store);
+
+      return {
+        message: isCorrect ? "You have won." : "Guess submitted.",
+        session: buildSessionView(session, playerId)
+      };
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ message: error.message || "Could not submit guess." });
+  }
+});
+
+app.use((error, _req, res, _next) => {
+  console.error("Unexpected server error.", error);
+  res.status(500).json({ message: "Something unexpected happened." });
 });
 
 async function startServer() {
   await ensureDataFile();
 
   app.listen(PORT, () => {
-    console.log(`Birthday reminder app running on http://localhost:${PORT}`);
+    console.log(`Guessing game running on http://localhost:${PORT}`);
   });
-
-  scheduleNextBirthdayRun();
 }
 
-async function runOnceIfRequested() {
-  if (!process.argv.includes("--run-birthday-job")) {
-    return false;
-  }
-
-  await ensureDataFile();
-
-  try {
-    const result = await sendBirthdayEmails({ reason: "cli" });
-    console.log(result.message);
-    process.exit(0);
-  } catch (error) {
-    console.error("Birthday job failed.", error);
-    process.exit(1);
-  }
-}
-
-runOnceIfRequested().then((didRun) => {
-  if (!didRun) {
-    startServer().catch((error) => {
-      console.error("Failed to start the birthday reminder app.", error);
-      process.exit(1);
-    });
-  }
+startServer().catch((error) => {
+  console.error("Failed to start the guessing game.", error);
+  process.exit(1);
 });

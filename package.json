@@ -1,18 +1,18 @@
 {
-  "name": "birthday-reminder-app",
+  "name": "guessing-game",
   "version": "1.0.0",
-  "description": "Birthday reminder app with customer signup, daily checks, and Gmail birthday emails.",
+  "description": "Live multiplayer guessing game with rotating game master rounds and score tracking.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js",
-    "birthday-job": "node server.js --run-birthday-job"
+    "dev": "node --watch server.js"
   },
   "keywords": [
-    "birthday-reminder",
-    "nodemailer",
+    "guessing-game",
+    "multiplayer",
+    "game-session",
     "express",
-    "gmail"
+    "chat-ui"
   ],
   "author": "",
   "license": "MIT",

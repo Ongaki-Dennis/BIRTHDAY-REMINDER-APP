@@ -3,95 +3,134 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Birthday Reminder App</title>
+    <title>Guessing Game</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="page-shell">
-      <section class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">Celebrate Customers Automatically</p>
-          <h1>Birthday reminders that wake up at 7:00 AM and send the love for you.</h1>
-          <p class="hero-text">
-            Capture customer birthdays in one clean place, keep every email unique,
-            and let the app check each morning for today’s celebrants.
+    <main class="app-shell">
+      <section class="hero-panel">
+        <div>
+          <p class="eyebrow">Live Multiplayer</p>
+          <h1>Guess fast, watch the room react, and pass the crown to the next game master.</h1>
+          <p class="hero-copy">
+            Create a session, invite friends with the code, and play short timed rounds in a
+            chat-style room with live scores and rotating control.
           </p>
-          <div class="hero-pills">
-            <span>Unique emails only</span>
-            <span>Daily birthday check</span>
-            <span>Gmail-ready delivery</span>
-          </div>
         </div>
 
-        <aside class="status-card">
-          <p class="eyebrow">Today’s Workflow</p>
-          <ol>
-            <li>Add customer details.</li>
-            <li>The app stores them in the database.</li>
-            <li>The scheduler checks birthdays every day at 7:00 AM.</li>
-            <li>Celebrants receive a birthday email.</li>
-          </ol>
-          <p class="status-note" id="scheduler-note">Loading scheduler status...</p>
-        </aside>
+        <div class="hero-stats">
+          <article>
+            <strong>3</strong>
+            <span>Attempts per player</span>
+          </article>
+          <article>
+            <strong>60s</strong>
+            <span>Round timer</span>
+          </article>
+          <article>
+            <strong>10</strong>
+            <span>Points for a win</span>
+          </article>
+        </div>
       </section>
 
-      <section class="content-grid">
-        <section class="card form-card">
+      <section class="lobby-grid">
+        <section class="panel">
           <div class="section-heading">
-            <p class="eyebrow">New Entry</p>
-            <h2>Add a birthday reminder</h2>
+            <p class="eyebrow">Enter Room</p>
+            <h2>Create or join a session</h2>
           </div>
 
-          <form id="birthday-form">
+          <form id="create-form" class="stack-form">
             <label>
-              Username
-              <input
-                id="username"
-                name="username"
-                maxlength="60"
-                placeholder="Amina Hassan"
-                required
-              />
+              Your display name
+              <input id="create-name" maxlength="40" placeholder="Amina" required />
             </label>
-
-            <label>
-              Email
-              <input
-                id="email"
-                name="email"
-                type="email"
-                maxlength="160"
-                placeholder="amina@example.com"
-                required
-              />
-            </label>
-
-            <label>
-              Date of birth
-              <input id="dateOfBirth" name="dateOfBirth" type="date" required />
-            </label>
-
-            <button type="submit" id="submit-button">Save birthday</button>
+            <button type="submit">Create session</button>
           </form>
 
-          <p class="feedback" id="form-feedback" hidden></p>
+          <div class="divider"><span>or</span></div>
+
+          <form id="join-form" class="stack-form">
+            <label>
+              Session code
+              <input id="join-code" maxlength="8" placeholder="AB12CD34" required />
+            </label>
+            <label>
+              Your display name
+              <input id="join-name" maxlength="40" placeholder="Bilal" required />
+            </label>
+            <button type="submit" class="secondary-button">Join session</button>
+          </form>
+
+          <p class="feedback" id="entry-feedback" hidden></p>
         </section>
 
-        <section class="card dashboard-card">
-          <div class="section-heading section-heading-inline">
+        <section class="panel session-panel" id="session-panel">
+          <div class="session-header">
             <div>
-              <p class="eyebrow">Dashboard</p>
-              <h2>Saved celebrants</h2>
+              <p class="eyebrow">Session</p>
+              <h2 id="session-title">No active session</h2>
             </div>
-            <span class="status-chip">Automatic 7:00 AM check</span>
+            <button id="leave-button" class="ghost-button" hidden>Leave</button>
           </div>
 
-          <div class="dashboard-meta">
-            <p id="total-count">0 customers saved</p>
-            <p id="job-feedback">Birthday emails are sent automatically when today matches a saved birthday.</p>
+          <div class="session-meta" id="session-meta">
+            <span>Choose a name to get started.</span>
           </div>
 
-          <div class="list-shell" id="entries-list"></div>
+          <div class="session-layout">
+            <aside class="sidebar">
+              <section class="mini-panel">
+                <div class="mini-panel-head">
+                  <h3>Players</h3>
+                  <span id="player-count">0 connected</span>
+                </div>
+                <div id="players-list" class="players-list"></div>
+              </section>
+
+              <section class="mini-panel" id="master-controls">
+                <div class="mini-panel-head">
+                  <h3>Game Master</h3>
+                </div>
+                <form id="question-form" class="stack-form">
+                  <label>
+                    Question
+                    <input id="question-input" maxlength="180" placeholder="What city is known as the City of Light?" />
+                  </label>
+                  <label>
+                    Answer
+                    <input id="answer-input" maxlength="120" placeholder="Paris" />
+                  </label>
+                  <button type="submit">Save question</button>
+                </form>
+                <button id="start-button" class="accent-button">Start round</button>
+              </section>
+            </aside>
+
+            <section class="chat-panel">
+              <div class="chat-topbar">
+                <div>
+                  <h3 id="round-title">Waiting in the lobby</h3>
+                  <p id="round-status">The current game master can prepare the next question.</p>
+                </div>
+                <div class="pill-group">
+                  <span class="pill" id="master-name">Game master: -</span>
+                  <span class="pill" id="countdown-pill">Timer: --</span>
+                </div>
+              </div>
+
+              <div id="chat-feed" class="chat-feed"></div>
+
+              <form id="guess-form" class="guess-form">
+                <label class="sr-only" for="guess-input">Your guess</label>
+                <input id="guess-input" maxlength="120" placeholder="Enter your guess" />
+                <button type="submit">Send guess</button>
+              </form>
+
+              <p class="feedback" id="session-feedback" hidden></p>
+            </section>
+          </div>
         </section>
       </section>
     </main>
